@@ -8,3 +8,10 @@ target/
 
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
+
+# Never push productive configuration files
+.env
+certs/cert.pem
+certs/key.pem
+
+Cargo.lock
