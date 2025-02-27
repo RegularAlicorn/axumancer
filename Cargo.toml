@@ -1,0 +1,30 @@
+[package]
+name = "axumancer"
+description = "The necromancer that raises an Axum server."
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.8", features = ["macros"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+tower-http = { version = "0.6", features = ["trace", "compression-br", "compression-gzip", "fs"] }
+#axum-extra = { version = "0.9", features = ["typed-header", "cookie", "cookie-private"] }
+tower-cookies = { version = "0.11", features = ["private"] }
+
+anyhow = "1"
+dotenv = "0.15"
+tokio = { version = "1", features = ["full"] }
+tokio-rustls = "0.26"
+rustls-pemfile = "2.2"
+
+rand = "0.9"
+hex = "0.4"
+bcrypt = "0.17"
+chrono = { version = "0.4", features = ["serde"] }
+jsonwebtoken = "9.3"
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"]}
