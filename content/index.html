@@ -8,31 +8,17 @@
     <title>Axumancer - Magic for Your Web Server</title>
 </head>
 <body>
+    <nav><a href="/">Index</a> | <a href="/signin">Sign-In</a> | <a href="/register">Register</a> {{nav_member_area}}</nav>
     <div class="container">
         <h1>⚡ Axumancer ⚡</h1>
         <p>Spin up an Axum web server in seconds with the magic of Axumancer.</p>
         <p>Your current IP: {{addr}}</p>
         {{has_session}}
+        
+        <a href="/register" class="btn-small">Register new account</a>
+
+        <br><br><br><br>
         <a href="https://github.com/RegularAlicorn/axumancer" class="btn">Get Started</a>
     </div>
-    <hr>
-    <p style=" font-size: 0.9em;color: #aaa;">
-        Our login button starts off disabled and is enabled only after our JavaScript loads ("core.js"). <br>
-        This ensures the interface behaves as expected. <br><br>
-
-        However, if JavaScript fails to load, the button will remain disabled, preventing users from logging in.
-    </p>
-
-    <form id="signin_form">
-        <label for="username">Username:</label>
-        <input type="text" id="username" name="username" required value="my.email@mailer.com">
-        <br><br>
-        <label for="password">Password:</label>
-        <input type="password" id="password" name="password" required value="okon">
-        <br><br>
-        <button type="submit" id="signin_submit" disabled>Login</button>
-    </form>
-    <br><br>
-    <a href="/register" class="btn-small">Register new account</a>
 </body>
 </html>

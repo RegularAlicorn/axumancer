@@ -92,11 +92,12 @@ function add_event_register_form() {
                         location.href = "/"
                     }
                 } else {
-                    alert("Register failed: " + response.statusText)
+                    var response_container = document.getElementById("response")
+                    response_container.innerHTML = "An internal server error happened. Please try again later."
                 }
             } catch (error) {
-                console.error("Error:", error)
-                alert("An error occurred while logging in.")
+                var response_container = document.getElementById("response")
+                response_container.innerHTML = "An error occurred during registration."
             }
         });
     }

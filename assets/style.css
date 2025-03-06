@@ -27,6 +27,11 @@ a:hover {
     color: #e6b800; /* Slightly darker yellow on hover */
     text-decoration: underline; /* Add underline for better visibility */
 }
+nav {
+    padding:0.5em;
+    max-width:100%;
+    border-bottom: #aaaaaa 1px solid;
+}
 .btn {
     display: inline-block;
     padding: 15px 30px;

@@ -9,6 +9,7 @@ use axum::{
 };
 use axum_server::tls_rustls::RustlsConfig;
 use rand::{rngs::OsRng, TryRngCore};
+use rusqlite::{Connection, DatabaseName};
 use services::routes::*;
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::OnceLock};
 use tower_cookies::{CookieManagerLayer, Cookies, Key};
@@ -35,6 +36,7 @@ pub struct ServerState {
     pub base_directory: PathBuf,
     pub dev_mode: bool,
     pub status_pages: HashMap<StatusPage, String>,
+    pub db_path: PathBuf,
 }
 
 impl ServerState {
@@ -42,6 +44,7 @@ impl ServerState {
         dev_mode: bool,
         base_directory: PathBuf,
         status_pages_vec: Vec<(StatusPage, String)>,
+        db_path: PathBuf,
     ) -> Self {
         let mut status_pages = HashMap::new();
         for (e, p) in status_pages_vec {
@@ -52,7 +55,14 @@ impl ServerState {
             base_directory,
             dev_mode,
             status_pages,
+            db_path,
         }
+    }
+    pub fn authentication_db(&self) -> String {
+        self.db_path
+            .join("db_authentication.sqlite")
+            .to_string_lossy()
+            .to_string()
     }
     pub fn get_status_page(&self, status: StatusPage) -> (StatusCode, String) {
         if let Some(file) = self.status_pages.get(&status) {
@@ -168,6 +178,33 @@ async fn main() -> anyhow::Result<()> {
     // At this point we can drop the result, since we returned from the function otherwise
     let base_directory = base_directory.unwrap();
 
+    // Check whether the database path exists
+    let mut db_base_path = base_directory.clone();
+    db_base_path.push("db");
+    let exists = if let Ok(e) = db_base_path.try_exists() {
+        e
+    } else {
+        false
+    };
+    if !exists {
+        error!("Unable to find [basepath]/db/ for database files.");
+        return Err(anyhow!("returning to slumber.."));
+    }
+    info!("Database folder available.");
+
+    let mut auth_db = PathBuf::from(db_base_path.clone());
+    auth_db.push("db_authentication.sqlite");
+    let exists = if let Ok(e) = auth_db.try_exists() {
+        e
+    } else {
+        false
+    };
+    if !exists {
+        error!("Unable to find the authentication datbase. Try installing the database (/scripts/create_database.sh)");
+        return Err(anyhow!("returning to slumber.."));
+    }
+    info!("Authentication database available.");
+
     // Checking for special status pages
     let status_404 = if let Ok(name) = dotenv::var("STATUS_404") {
         name
@@ -196,7 +233,22 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Create the common server state
-    let server_state = ServerState::new(dev_mode, base_directory, all_status_pages);
+    let server_state = ServerState::new(dev_mode, base_directory, all_status_pages, db_base_path);
+
+    let conn = Connection::open(server_state.authentication_db());
+    if conn.is_err() {
+        error!("Unable to connect to the database. {}", conn.unwrap_err());
+        return Err(anyhow!("returning to slumber.."));
+    }
+    let conn = conn.unwrap();
+
+    if let Ok(readonly) = conn.is_readonly(DatabaseName::Main) {
+        if readonly {
+            error!("Bad permissions on database, verify the server has write permissions on the directory and all files in /db");
+            return Err(anyhow!("returning to slumber.."));
+        }
+    }
+    info!("Database seems writeable");
 
     // Generate a new random crypt key if the .env variable is set to true
     let generate_crypt_key = dotenv::var("GENERATE_CRYPT_KEY")
@@ -248,7 +300,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/secret", get(get_cookies))
         .route("/user", get(user_handler))
         .route("/404", get(missing_page_404))
-        .route("/signin", post(auth::sign_in))
+        .route("/signin", get(signin).post(auth::sign_in))
         .route("/register", get(register).post(auth::register))
         .route("/logout", get(logout))
         .route(

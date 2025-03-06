@@ -22,7 +22,7 @@ struct UserResponse {
 
 pub fn get_content_data(
     page: String,
-    server_state: ServerState,
+    server_state: &ServerState,
     socket_addr: SocketAddr,
 ) -> (StatusCode, String) {
     let file_path = format!("content/{}", page);
@@ -68,29 +68,59 @@ pub mod routes {
         State(server_state): State<ServerState>,
         ConnectInfo(addr): ConnectInfo<SocketAddr>,
     ) -> (StatusCode, impl IntoResponse) {
-        let mut content_data = get_content_data("index.html".to_string(), server_state, addr);
+        let mut content_data = get_content_data("index.html".to_string(), &server_state, addr);
         content_data.1 = content_data.1.replace("{{addr}}", &addr.to_string());
 
+        let mut nav_member_area = "".to_string();
         let mut has_session_str = "".to_string();
-        let jwt_claims_opt = get_jwt_claims(cookies);
+        let jwt_claims_opt = get_jwt_claims(&server_state, cookies);
         if let Some(claims) = jwt_claims_opt {
             has_session_str = format!(
                 "<a href='/home'>Member area for {}</a><br><br>",
                 claims.email
             );
+            nav_member_area = format!("| <a href='/home'>Member Area</a>");
         }
 
         content_data.1 = content_data.1.replace("{{has_session}}", &has_session_str);
+        content_data.1 = content_data
+            .1
+            .replace("{{nav_member_area}}", &nav_member_area);
 
         (content_data.0, Html(content_data.1))
     }
 
-    pub async fn register(
+    pub async fn signin(
+        cookies: Cookies,
         State(server_state): State<ServerState>,
         ConnectInfo(addr): ConnectInfo<SocketAddr>,
     ) -> (StatusCode, impl IntoResponse) {
-        let content_data = get_content_data("register.html".to_string(), server_state, addr);
+        let mut content_data = get_content_data("signin.html".to_string(), &server_state, addr);
 
+        let mut nav_member_area = "".to_string();
+        if let Some(_claims) = get_jwt_claims(&server_state, cookies) {
+            nav_member_area = format!("| <a href='/home'>Member Area</a>");
+        }
+        content_data.1 = content_data
+            .1
+            .replace("{{nav_member_area}}", &nav_member_area);
+        (content_data.0, Html(content_data.1))
+    }
+
+    pub async fn register(
+        cookies: Cookies,
+        State(server_state): State<ServerState>,
+        ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ) -> (StatusCode, impl IntoResponse) {
+        let mut content_data = get_content_data("register.html".to_string(), &server_state, addr);
+
+        let mut nav_member_area = "".to_string();
+        if let Some(_claims) = get_jwt_claims(&server_state, cookies) {
+            nav_member_area = format!("| <a href='/home'>Member Area</a>");
+        }
+        content_data.1 = content_data
+            .1
+            .replace("{{nav_member_area}}", &nav_member_area);
         (content_data.0, Html(content_data.1))
     }
 
@@ -99,11 +129,12 @@ pub mod routes {
         State(server_state): State<ServerState>,
         ConnectInfo(addr): ConnectInfo<SocketAddr>,
     ) -> (StatusCode, impl IntoResponse) {
-        let mut content_data = get_content_data("admin_index.html".to_string(), server_state, addr);
+        let mut content_data =
+            get_content_data("admin_index.html".to_string(), &server_state, addr);
         content_data.1 = content_data.1.replace("{{addr}}", &addr.to_string());
 
         let mut has_session_str = "".to_string();
-        let jwt_claims_opt = get_jwt_claims(cookies);
+        let jwt_claims_opt = get_jwt_claims(&server_state, cookies);
         if let Some(claims) = jwt_claims_opt {
             has_session_str = format!(
                 "<a href='/home'>Member area for {}</a><br><br>",
@@ -125,7 +156,7 @@ pub mod routes {
         ConnectInfo(addr): ConnectInfo<SocketAddr>,
     ) -> (StatusCode, impl IntoResponse) {
         let status = server_state.get_status_page(StatusPage::Status404);
-        info!("{} 404'd", addr.ip());
+        info!("{} 404'ed", addr.ip());
         (status.0, Html(status.1))
     }
 
@@ -142,14 +173,21 @@ pub mod routes {
     }
 
     pub async fn get_protected(
+        cookies: Cookies,
         State(server_state): State<ServerState>,
         ConnectInfo(addr): ConnectInfo<SocketAddr>,
     ) -> impl IntoResponse {
-        Html(get_content_data(
-            "protected.html".to_string(),
-            server_state,
-            addr,
-        ))
+        let mut content_data = get_content_data("protected.html".to_string(), &server_state, addr);
+
+        let mut nav_member_area = "".to_string();
+        if let Some(_claims) = get_jwt_claims(&server_state, cookies) {
+            nav_member_area = format!("| <a href='/home'>Member Area</a>");
+        }
+        content_data.1 = content_data
+            .1
+            .replace("{{nav_member_area}}", &nav_member_area);
+
+        (content_data.0, Html(content_data.1))
     }
 
     pub async fn logout(
@@ -161,7 +199,7 @@ pub mod routes {
 
         Html(get_content_data(
             "logout.html".to_string(),
-            server_state,
+            &server_state,
             addr,
         ))
     }

@@ -8,10 +8,16 @@ use axum::{
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
+use rusqlite::{
+    types::{FromSql, FromSqlResult},
+    Connection,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower_cookies::{cookie::SameSite, Cookie, Cookies};
 use tracing::{debug, error, info};
+
+use crate::ServerState;
 
 pub struct AuthError {
     message: String,
@@ -40,11 +46,26 @@ pub struct CurrentUser {
 #[derive(Clone)]
 pub struct MinAccessState(pub AccessLevel);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum AccessLevel {
     _Guest,
     User,
     Admin,
+}
+
+impl FromSql for AccessLevel {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> FromSqlResult<Self> {
+        let i = String::column_result(value)?;
+
+        if i.to_lowercase() == "user".to_string() {
+            return Ok(Self::User);
+        }
+        if i.to_lowercase() == "admin".to_string() {
+            return Ok(Self::Admin);
+        }
+
+        Ok(Self::_Guest)
+    }
 }
 
 impl PartialOrd for AccessLevel {
@@ -86,7 +107,7 @@ impl PartialOrd for AccessLevel {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 // Define a structure for holding claims data used in JWT tokens
 pub struct Claims {
     pub exp: usize,    // Expiry time of the token
@@ -150,12 +171,30 @@ pub enum RegisterResult {
     PasswordTooShort,
 }
 
+#[derive(Debug, Serialize)]
+pub struct DbUser {
+    id: usize,
+    email: String,
+    password_hash: String,
+    access_level: AccessLevel,
+    created_at: chrono::DateTime<Utc>,
+    jwt_session_token: String,
+}
+
 #[axum::debug_handler]
 pub async fn register(
+    State(server_state): State<ServerState>,
     Json(user_data): Json<SignInData>, // JSON payload containing sign-in data
 ) -> Result<Json<RegisterResult>, StatusCode> {
+    let conn = Connection::open(server_state.authentication_db());
+    if conn.is_err() {
+        error!("Unable to connect to the database. {}", conn.unwrap_err());
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let conn = conn.unwrap();
+
     // Attempt to retrieve user information based on the provided email
-    if user_exists(&user_data.email) {
+    if user_exists(&conn, &user_data.email) {
         return Ok(Json(RegisterResult::AlreadyExists));
     }
 
@@ -176,8 +215,25 @@ pub async fn register(
         );
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
+    let password_hash = password_hash.unwrap();
 
-    info!("Successful registration for {}", user_data.email);
+    let result = conn.execute(
+        "INSERT INTO users (email, password_hash, access_level) VALUES (:id, :pass, :accesslevel)",
+        &[
+            (":id", &user_data.email),
+            (":pass", &password_hash),
+            (":accesslevel", &"user".to_string()),
+        ],
+    );
+    match result {
+        Ok(_) => {
+            info!("Successful registration for {}", user_data.email)
+        }
+        Err(e) => {
+            error!("An error occurred during registration. {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
 
     // Return the token as a JSON-wrapped string
     Ok(Json(RegisterResult::Success))
@@ -189,7 +245,7 @@ pub fn logout_session(cookies: Cookies) {
     cookies.add(c);
 }
 
-pub fn get_jwt_claims(cookies: Cookies) -> Option<Claims> {
+pub fn get_jwt_claims(server_state: &ServerState, cookies: Cookies) -> Option<Claims> {
     match cookies.get("jwt") {
         Some(cookie) => {
             let jwt_val = cookie.value_trimmed();
@@ -211,7 +267,27 @@ pub fn get_jwt_claims(cookies: Cookies) -> Option<Claims> {
                         logout_session(cookies);
                         return None;
                     } else {
-                        info!("Session still valid");
+                        let conn = Connection::open(server_state.authentication_db());
+                        if conn.is_err() {
+                            error!("Unable to connect to the database. {}", conn.unwrap_err());
+                            return None;
+                        }
+                        let _conn = conn.unwrap();
+
+                        // We reset the expiration time
+                        let jwt_token = jwt_update_expiration(claims.claims.clone());
+                        if jwt_token.is_err() {
+                            info!("Bad cookie contents");
+                            return None;
+                        }
+                        let mut cookie = Cookie::new("jwt", jwt_token.unwrap());
+
+                        cookie.set_path("/");
+                        cookie.set_secure(true);
+                        cookie.set_http_only(true);
+                        cookie.set_same_site(SameSite::Strict);
+
+                        cookies.add(cookie);
                     }
                 } else {
                     // Bad expiration date contents
@@ -226,6 +302,7 @@ pub fn get_jwt_claims(cookies: Cookies) -> Option<Claims> {
                 });
             } else {
                 info!("Bad cookie contents");
+                logout_session(cookies);
             }
         }
         None => {}
@@ -250,8 +327,42 @@ fn retrieve_user_by_email(email: &str) -> Option<CurrentUser> {
     Some(current_user) // Return the hardcoded user
 }
 
-fn user_exists(email: &String) -> bool {
-    email == &"my.email@mailer.com".to_string()
+fn user_exists(conn: &Connection, email: &String) -> bool {
+    let stmt = conn.prepare("SELECT id, email, access_level FROM users WHERE email = :email");
+
+    if let Ok(mut stmt) = stmt {
+        let user_res = stmt.query_row(&[(":email", email)], |row| {
+            Ok(DbUser {
+                id: row.get(0)?,
+                email: row.get(1)?,
+                access_level: row.get(2)?,
+                password_hash: "".to_string(),
+                created_at: chrono::Utc::now(),
+                jwt_session_token: "".to_string(),
+            })
+        });
+
+        if user_res.is_ok() {
+            info!("Username already taken: {}", user_res.unwrap().email);
+            return true;
+        }
+
+        let user_res = user_res.unwrap_err();
+        match user_res {
+            rusqlite::Error::QueryReturnedNoRows => {
+                return false;
+            }
+            _ => {
+                error!(
+                    "Error checking whether a user exists. User: {}, Error {}",
+                    email, user_res
+                );
+                return true;
+            }
+        }
+    } else {
+        false
+    }
 }
 
 pub async fn authorization_middleware(
@@ -338,6 +449,43 @@ pub fn encode_jwt(email: String) -> Result<String, StatusCode> {
 
             let iat: usize = now.timestamp() as usize;
             let claim = Claims { iat, exp, email };
+
+            encode(
+                &Header::default(),
+                &claim,
+                &EncodingKey::from_secret(jwt_secret.as_ref()),
+            )
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        }
+        Err(e) => {
+            error!("No JWT encryption secret in .env found: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub fn jwt_update_expiration(claims: Claims) -> Result<String, StatusCode> {
+    let jwt_secret = dotenv::var("JWT_SECRET");
+    match jwt_secret {
+        Ok(jwt_secret) => {
+            let expiration_timemout = dotenv::var("SESSION_COOKIE_INVALIDATION_TIMEOUT")
+                .unwrap_or("43200".to_string())
+                .parse::<usize>()
+                .unwrap_or(43200);
+
+            let now = Utc::now();
+            let expire: chrono::TimeDelta = if expiration_timemout > 0 {
+                Duration::seconds(expiration_timemout as i64)
+            } else {
+                Duration::seconds(i64::MAX / 1_000)
+            };
+            let exp = (now + expire).timestamp() as usize;
+
+            let claim = Claims {
+                iat: claims.iat,
+                exp,
+                email: claims.email,
+            };
 
             encode(
                 &Header::default(),
